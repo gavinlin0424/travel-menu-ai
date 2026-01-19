@@ -54,33 +54,17 @@ if api_key:
                     # 設定模型：使用 Gemini 1.5 Flash (速度快、視覺強)
                     # generation_config 設定回應格式為 JSON，這點非常重要！
                     model = genai.GenerativeModel(
-                        model_name="gemini-1.5-flash",
+                        model_name="gemini-pro-vision",
                         generation_config={"response_mime_type": "application/json"}
                     )
 
-                    prompt = """
-                    你是一個專業的點餐助手。請分析這張菜單圖片：
-                    1. 識別所有菜色名稱和價格。
-                    2. 將所有非繁體中文的菜名，翻譯成「台灣習慣的繁體中文」。
-                    3. 輸出格式必須是以下的 JSON list schema：
-                       [{"item": "菜名 (翻譯)", "price": 數字}, ...]
-                    4. 如果價格是時價或不明，price 填 0。
-                    """
-
-                    # 發送請求 (圖片直接傳給 Gemini，不需要轉 Base64)
-                    response = model.generate_content([prompt, image])
-                    
-                    # Gemini 在 JSON 模式下會直接回傳乾淨的 JSON 字串
-                    menu_data = json.loads(response.text)
-                    
-                    st.session_state['menu_data'] = menu_data
-                    st.success("解析成功！")
-                    
-                except Exception as e:
-                    st.error(f"發生錯誤：{e}")
-                    # 如果解析 JSON 失敗，印出原始文字方便除錯
-                    if 'response' in locals():
-                        st.write("原始回傳內容：", response.text)
+# 因為舊版不支援 JSON Mode，我們 Prompt 也要稍微改一下，讓它乖乖聽話
+prompt = """
+你是一個菜單解析助手。
+請分析這張圖片，列出菜名與價格。
+請"嚴格"依照這個格式輸出純文字，不要有任何 Markdown 或其他廢話：
+[{"item": "菜名", "price": 0}, {"item": "菜名2", "price": 100}]
+"""
 
     # --- 3. 點餐介面 (這部分邏輯不變) ---
     if st.session_state['menu_data']:
