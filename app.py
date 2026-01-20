@@ -42,21 +42,18 @@ except:
     st.error("連線錯誤，請檢查 Secrets 設定")
     st.stop()
 
-# --- 資料庫操作 (修復版) ---
+# --- 資料庫操作 ---
 def fetch_data():
     try:
-        # 嘗試讀取
-        menu_df = conn.read(worksheet="Menu", ttl=5)
-        orders_df = conn.read(worksheet="Orders", ttl=5)
+        menu_df = conn.read(worksheet="Menu", ttl=0) # ttl=0 強制不快取
+        orders_df = conn.read(worksheet="Orders", ttl=0)
         
-        # 確保欄位存在，若無則補上
+        # 欄位防呆
         if 'shop' not in menu_df.columns: menu_df['shop'] = '未分類'
         if 'shop' not in orders_df.columns: orders_df['shop'] = '未分類'
         
         return menu_df, orders_df
-        
     except Exception as e:
-        # 發生錯誤時回傳空表，避免程式當掉
         return pd.DataFrame(columns=["shop", "item", "price"]), pd.DataFrame(columns=["name", "shop", "item", "qty"])
 
 def save_menu(df):
@@ -93,30 +90,23 @@ with col2:
 # 讀取資料
 menu_df, orders_df = fetch_data()
 
-# --- 🚑 緊急除錯區 (這段會幫你抓出連線問題) ---
-if menu_df.empty and orders_df.empty:
-    st.error("⚠️ 讀不到資料！啟動診斷模式...")
-    try:
-        # 嘗試列出試算表裡到底有哪些分頁
-        # 注意：這需要 gsheets connection 的權限
-        st.info("正在檢查你的 Google 試算表...")
-        st.write("請確認你的試算表下方分頁名稱是否為 **Menu** 和 **Orders** (首字大寫)。")
-        st.write("如果看到 'Sheet1' 或 '工作表1'，請去 Google 試算表把它改名。")
-    except:
-        st.write("連線完全失敗，請檢查 secrets 裡的網址。")
-
-# --- 🧹 資料清理 (關鍵修復：避免 data_editor 崩潰) ---
-# 1. 確保數字欄位真的是數字 (NaN 補 0)
+# --- 🧹 資料清理 (嚴格版：避免型別衝突) ---
+# 1. 處理 Menu
 menu_df['price'] = pd.to_numeric(menu_df['price'], errors='coerce').fillna(0).astype(int)
+for col in ['shop', 'item']:
+    if col in menu_df.columns:
+        menu_df[col] = menu_df[col].fillna("").astype(str)
 
-if 'qty' in orders_df.columns:
-    orders_df['qty'] = pd.to_numeric(orders_df['qty'], errors='coerce').fillna(0).astype(int)
-else:
+# 2. 處理 Orders (最容易報錯的地方)
+# 確保 qty 欄位存在且為 int
+if 'qty' not in orders_df.columns:
     orders_df['qty'] = 0
+orders_df['qty'] = pd.to_numeric(orders_df['qty'], errors='coerce').fillna(0).astype(int)
 
-# 2. 剩下的文字欄位補空字串 (避免 None)
-menu_df = menu_df.fillna("")
-orders_df = orders_df.fillna("")
+# 確保文字欄位為 string (分開處理，不要用 fillna 全部蓋過去)
+for col in ['name', 'shop', 'item']:
+    if col in orders_df.columns:
+        orders_df[col] = orders_df[col].fillna("").astype(str)
 
 # 分頁定義
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 新增店家", "🌏 找食記", "🛠️ 管理"])
@@ -150,7 +140,7 @@ with tab1:
                                 "qty": qty_input,
                                 "price": price_input 
                             }
-                            # 重新讀取確保不蓋掉別人的
+                            # 重新讀取並儲存
                             cur_menu, cur_orders = fetch_data()
                             updated_orders = pd.concat([cur_orders, pd.DataFrame([new_row])], ignore_index=True)
                             save_orders(updated_orders)
@@ -165,7 +155,6 @@ with tab2:
     if orders_df.empty:
         st.write("尚無訂單。")
     else:
-        # 合併顯示
         merged = pd.merge(orders_df, menu_df, on=["shop", "item"], how="left", suffixes=('', '_menu'))
         merged['final_price'] = merged['price_menu'].fillna(0)
         
@@ -186,25 +175,30 @@ with tab2:
     st.write("---")
     st.write("### 🛠️ 修改訂單")
     
-    # 這裡就是原本報錯的地方，現在已經修復
-    edited_orders = st.data_editor(
-        orders_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "name": st.column_config.TextColumn("名字"),
-            "shop": st.column_config.TextColumn("店家"),
-            "item": st.column_config.TextColumn("品項"),
-            "qty": st.column_config.NumberColumn("數量", required=True, default=1) 
-        },
-        key="order_editor"
-    )
-    
-    if st.button("💾 儲存修改"):
-        save_orders(edited_orders)
-        st.success("已更新！")
-        time.sleep(1)
-        st.rerun()
+    # 【防崩潰】使用 try-except 包裹編輯器
+    try:
+        edited_orders = st.data_editor(
+            orders_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "name": st.column_config.TextColumn("名字"),
+                "shop": st.column_config.TextColumn("店家"),
+                "item": st.column_config.TextColumn("品項"),
+                "qty": st.column_config.NumberColumn("數量", required=True, default=1, min_value=0) 
+            },
+            key="order_editor"
+        )
+        
+        if st.button("💾 儲存修改"):
+            save_orders(edited_orders)
+            st.success("已更新！")
+            time.sleep(1)
+            st.rerun()
+            
+    except Exception as e:
+        st.error("⚠️ 資料格式異常，無法顯示編輯器。建議您到「管理」分頁手動清除 Google Sheets 中異常的空白行。")
+        st.caption(f"錯誤代碼: {e}")
 
 # =======================
 # Tab 3: 新增店家
