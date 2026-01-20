@@ -5,9 +5,10 @@ import time
 from PIL import Image
 import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
+from duckduckgo_search import DDGS  # 引入搜尋工具
 
 # --- 📱 手機版面設定 CSS ---
-st.set_page_config(page_title="點餐系統", page_icon="🍱", layout="centered")
+st.set_page_config(page_title="點餐", page_icon="🍱", layout="centered")
 # --- 設定手機主畫面圖示 (Mobile App Icon) ---
 # 請將下方的 URL 換成你放在 GitHub 上的圖片 Raw URL
 # 或是隨便找一個網路上的圖示網址測試
@@ -34,48 +35,15 @@ st.markdown(
 
 # ... 下面接原本的主程式 ...
 
+
 st.markdown("""
     <style>
-    /* 全域字體優化 */
-    html, body, [class*="css"] {
-        font-family: 'Heiti TC', 'Microsoft JhengHei', sans-serif;
-    }
-    /* Tab 標籤加大 */
-    button[data-baseweb="tab"] {
-        font-size: 16px !important;
-        padding: 10px !important;
-        flex: 1; 
-    }
-    /* 數字輸入框 */
-    input[type="number"] {
-        font-size: 18px !important; 
-        text-align: center; 
-    }
-    /* 按鈕樣式 */
-    .stButton > button {
-        width: 100%;
-        border-radius: 8px;
-        font-weight: bold;
-        padding: 10px;
-    }
-    
-    /* 卡片樣式 */
-    div.dish-card {
-        background-color: #f0f2f6;
-        padding: 10px 15px;
-        border-radius: 10px;
-        margin-bottom: 8px;
-        border: 1px solid #e0e0e0;
-    }
-    
-    /* Expander 樣式 */
-    .streamlit-expanderHeader {
-        font-size: 18px;
-        font-weight: bold;
-        background-color: #fff3e0;
-        color: #e65100;
-        border-radius: 5px;
-    }
+    html, body, [class*="css"] { font-family: 'Heiti TC', 'Microsoft JhengHei', sans-serif; }
+    button[data-baseweb="tab"] { font-size: 16px !important; padding: 10px !important; flex: 1; }
+    input[type="number"] { font-size: 18px !important; text-align: center; }
+    .stButton > button { width: 100%; border-radius: 8px; font-weight: bold; padding: 10px; }
+    div.dish-card { background-color: #f0f2f6; padding: 10px 15px; border-radius: 10px; margin-bottom: 8px; border: 1px solid #e0e0e0; }
+    .streamlit-expanderHeader { font-size: 18px; font-weight: bold; background-color: #fff3e0; color: #e65100; border-radius: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -93,17 +61,11 @@ except:
 # --- 資料庫操作 ---
 def fetch_data():
     try:
-        # ttl=0 確保每次都抓最新資料
         menu_df = conn.read(worksheet="Menu", ttl=0)
         orders_df = conn.read(worksheet="Orders", ttl=0)
-        
-        # 補齊欄位
         if 'shop' not in menu_df.columns: menu_df['shop'] = '未分類'
         if 'shop' not in orders_df.columns: orders_df['shop'] = '未分類'
-        
-        # 轉型確保價格是數字 (編輯時才不會報錯)
         menu_df['price'] = pd.to_numeric(menu_df['price'], errors='coerce').fillna(0).astype(int)
-        
     except:
         menu_df = pd.DataFrame(columns=["shop", "item", "price"])
         orders_df = pd.DataFrame(columns=["name", "shop", "item", "qty"])
@@ -114,6 +76,17 @@ def save_menu(df):
 
 def save_orders(df):
     conn.update(worksheet="Orders", data=df)
+
+# --- 搜尋功能函式 ---
+def search_menu_on_web(query):
+    """使用 DuckDuckGo 搜尋菜單文字資訊"""
+    try:
+        results = DDGS().text(f"{query} 菜單 價格 2024 2025", max_results=5)
+        # 將搜尋結果合併成字串給 AI 讀
+        search_content = "\n".join([f"標題: {r['title']}\n內容: {r['body']}" for r in results])
+        return search_content
+    except Exception as e:
+        return None
 
 # --- 👋 登入畫面 ---
 if "user_name" not in st.session_state or not st.session_state.user_name:
@@ -128,44 +101,44 @@ if "user_name" not in st.session_state or not st.session_state.user_name:
 # --- 主程式 ---
 st.caption(f"👤 身份：{st.session_state.user_name}")
 menu_df, orders_df = fetch_data()
-
-# 補強空值
 menu_df = menu_df.fillna("")
 orders_df = orders_df.fillna("")
 
 if menu_df.empty: menu_df = pd.DataFrame(columns=["shop", "item", "price"])
 if orders_df.empty: orders_df = pd.DataFrame(columns=["name", "shop", "item", "qty"])
 
-# 定義 4 個分頁
-tab1, tab2, tab3, tab4 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 加菜", "🛠️ 管理"])
+# 定義 5 個分頁
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 拍照", "🔍 搜尋", "🛠️ 管理"])
+
+# 提取共用的 Prompt (關鍵修改：保留原文)
+COMMON_PROMPT = """
+你是一個菜單整理助手。請依照以下規則提取菜單：
+1. 識別所有菜色與價格。
+2. 【絕對規則】如果菜名原本就是繁體中文（例如：「冷露」、「春芽」、「歐蕾」），請「完整保留原文」，絕對不要翻譯成白話文（不要改成冬瓜茶、綠茶、拿鐵）。
+3. 只有當原文是外文（英/日/韓）時，才翻譯成台灣習慣的繁體中文。
+4. 輸出 JSON list: [{"item": "菜名", "price": 數字}]。
+5. 價格不明填 0。
+"""
 
 # =======================
-# Tab 1: 點餐 (支援摺疊收納)
+# Tab 1: 點餐
 # =======================
 with tab1:
     if menu_df.empty:
-        st.info("目前沒有菜單，請去「📸 加菜」或「🛠️ 管理」新增。")
+        st.info("目前沒有菜單，請去「📸 拍照」或「🔍 搜尋」新增。")
     else:
-        # 準備舊訂單 map
         my_orders = orders_df[orders_df['name'] == st.session_state.user_name]
-        my_order_map = {}
-        for _, r in my_orders.iterrows():
-            key = f"{r['shop']}_{r['item']}"
-            my_order_map[key] = r['qty']
-        
+        my_order_map = {f"{r['shop']}_{r['item']}": r['qty'] for _, r in my_orders.iterrows()}
         current_input = {}
         
         with st.form("order_form"):
             shops = menu_df['shop'].unique()
-            
             for shop_name in shops:
                 if not shop_name: continue
-                
                 shop_menu = menu_df[menu_df['shop'] == shop_name]
-                item_count = len(shop_menu)
                 
-                with st.expander(f"🏪 {shop_name} ({item_count})", expanded=True):
-                    for index, row in shop_menu.iterrows():
+                with st.expander(f"🏪 {shop_name} ({len(shop_menu)})", expanded=True):
+                    for _, row in shop_menu.iterrows():
                         dish = row['item']
                         price = row['price']
                         unique_key = f"{shop_name}_{dish}"
@@ -184,28 +157,18 @@ with tab1:
                             f"數量", min_value=0, step=1, value=default_qty, 
                             key=f"q_{unique_key}", label_visibility="collapsed"
                         )
-            
             st.write("")
-            submitted = st.form_submit_button("💾 送出訂單", type="primary")
-
-        if submitted:
-            clean_orders = orders_df[orders_df['name'] != st.session_state.user_name]
-            new_rows = []
-            for unique_key, qty in current_input.items():
-                if qty > 0:
-                    shop_val, item_val = unique_key.split("_", 1)
-                    new_rows.append({
-                        "name": st.session_state.user_name,
-                        "shop": shop_val,
-                        "item": item_val,
-                        "qty": qty
-                    })
-            
-            final_df = pd.concat([clean_orders, pd.DataFrame(new_rows)], ignore_index=True)
-            save_orders(final_df)
-            st.toast("✅ 訂單已更新！")
-            time.sleep(1)
-            st.rerun()
+            if st.form_submit_button("💾 送出訂單", type="primary"):
+                clean_orders = orders_df[orders_df['name'] != st.session_state.user_name]
+                new_rows = []
+                for k, qty in current_input.items():
+                    if qty > 0:
+                        s, i = k.split("_", 1)
+                        new_rows.append({"name": st.session_state.user_name, "shop": s, "item": i, "qty": qty})
+                save_orders(pd.concat([clean_orders, pd.DataFrame(new_rows)], ignore_index=True))
+                st.toast("✅ 訂單已更新！")
+                time.sleep(1)
+                st.rerun()
 
 # =======================
 # Tab 2: 統計
@@ -216,102 +179,124 @@ with tab2:
     else:
         merged = pd.merge(orders_df, menu_df, on=["shop", "item"], how="left")
         merged['subtotal'] = merged['qty'] * merged['price']
-        
-        total = merged['subtotal'].sum()
-        st.metric("💰 總金額", f"${int(total)}")
+        st.metric("💰 總金額", f"${int(merged['subtotal'].sum())}")
         
         st.subheader("📋 廚房準備清單")
-        shops_in_order = merged['shop'].unique()
-        for shop in shops_in_order:
+        for shop in merged['shop'].unique():
             with st.expander(f"🏪 {shop}", expanded=True):
                 shop_data = merged[merged['shop'] == shop]
                 summary = shop_data.groupby('item')['qty'].sum().reset_index()
-                summary = summary[summary['qty'] > 0]
-                st.table(summary)
-            
+                st.table(summary[summary['qty'] > 0])
+        
         st.divider()
-        st.subheader("👤 個人結帳明細")
+        st.subheader("👤 個人明細")
         for name, group in merged.groupby('name'):
-            p_total = group['subtotal'].sum()
-            with st.expander(f"{name} (${int(p_total)})"):
+            with st.expander(f"{name} (${int(group['subtotal'].sum())})"):
                 for _, row in group.iterrows():
                     st.write(f"[{row['shop']}] {row['item']} x{row['qty']}")
-
         if st.button("🔄 刷新"): st.rerun()
 
 # =======================
-# Tab 3: AI 加菜
+# Tab 3: 拍照新增
 # =======================
 with tab3:
     st.write("### 📸 拍照新增")
-    
-    shop_name_input = st.text_input("🏪 店家名稱", placeholder="例如：50嵐")
+    shop_input = st.text_input("🏪 店家名稱 (拍照)", placeholder="例如：50嵐")
     uploaded_file = st.file_uploader("上傳菜單照片", type=["jpg", "png", "jpeg"])
     
-    if uploaded_file and st.button("✨ 開始解析"):
-        if not shop_name_input:
-            st.error("⚠️ 請輸入店家名稱！")
+    if uploaded_file and st.button("✨ 解析照片"):
+        if not shop_input:
+            st.error("請輸入店家名稱！")
         else:
-            with st.spinner(f"正在讀取【{shop_name_input}】的菜單..."):
+            with st.spinner(f"正在看【{shop_input}】的菜單..."):
                 try:
                     img = Image.open(uploaded_file)
-                    model = genai.GenerativeModel(
-                        model_name="gemini-2.5-flash", 
-                        generation_config={"response_mime_type": "application/json"}
-                    )
-                    prompt = """
-                    你是一個台灣在地導遊與翻譯。請分析這張菜單圖片：
-                    1. 識別所有菜色與價格。
-                    2. 【重要】所有菜名一律翻譯成「台灣習慣的繁體中文」。
-                    3. 不要保留外文原文。
-                    4. 輸出 JSON list: [{"item": "中文菜名", "price": 數字}]。
-                    5. 價格不明填 0。
-                    """
-
-                    resp = model.generate_content([prompt, img])
-                    data = json.loads(resp.text)
+                    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+                    resp = model.generate_content([COMMON_PROMPT, img])
                     
-                    new_df = pd.DataFrame(data)
-                    new_df['shop'] = shop_name_input
+                    new_df = pd.DataFrame(json.loads(resp.text))
+                    new_df['shop'] = shop_input
                     new_df = new_df[['shop', 'item', 'price']]
                     
-                    combined = pd.concat([menu_df, new_df], ignore_index=True)
-                    combined = combined.drop_duplicates(subset=['shop', 'item'], keep='last')
-                    
-                    save_menu(combined)
-                    st.success(f"成功新增 {len(data)} 道菜！")
+                    save_menu(pd.concat([menu_df, new_df], ignore_index=True).drop_duplicates(subset=['shop', 'item'], keep='last'))
+                    st.success(f"新增成功！")
                     time.sleep(2)
                     st.rerun()
                 except Exception as e:
                     st.error(f"解析失敗: {e}")
 
 # =======================
-# Tab 4: 菜單管理 (新增編輯功能)
+# Tab 4: 搜尋新增 (新功能!)
 # =======================
 with tab4:
-    st.write("### 🛠️ 編輯與刪除菜單")
-    st.info("💡 這裡像 Excel 一樣，可以直接點兩下修改，或勾選刪除。改完記得按下面的儲存按鈕！")
+    st.write("### 🔍 AI 搜尋菜單")
+    st.info("輸入店名，AI 會去網路上找菜單。")
+    
+    search_shop_name = st.text_input("🔍 請輸入店家名稱", placeholder="例如：可不可熟成紅茶")
+    
+    if st.button("🕷️ 開始搜尋並建立菜單"):
+        if not search_shop_name:
+            st.error("請輸入店名！")
+        else:
+            with st.spinner(f"正在網路上搜尋【{search_shop_name}】的菜單與食記..."):
+                # 1. 先用 DuckDuckGo 搜尋網路文字
+                web_content = search_menu_on_web(search_shop_name)
+                
+                if not web_content:
+                    st.warning("搜尋不到資料，嘗試使用 AI 內建知識庫...")
+                    web_content = f"請根據你的知識庫列出 {search_shop_name} 的菜單。"
+                
+                # 2. 將搜尋到的亂七八糟文字丟給 AI 整理
+                try:
+                    model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+                    
+                    # 組合 Prompt：搜尋結果 + 整理指令
+                    full_prompt = f"""
+                    以下是關於「{search_shop_name}」的網路搜尋結果或食記：
+                    {web_content}
+                    
+                    請根據以上資訊整理出菜單。
+                    {COMMON_PROMPT}
+                    """
+                    
+                    resp = model.generate_content(full_prompt)
+                    items = json.loads(resp.text)
+                    
+                    if items:
+                        new_df = pd.DataFrame(items)
+                        new_df['shop'] = search_shop_name
+                        new_df = new_df[['shop', 'item', 'price']]
+                        
+                        save_menu(pd.concat([menu_df, new_df], ignore_index=True).drop_duplicates(subset=['shop', 'item'], keep='last'))
+                        st.success(f"搜尋完畢！找到 {len(items)} 道菜（{items[0]['item']}...等）")
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.warning("AI 找不到完整的菜單資訊，請試著手動輸入或上傳照片。")
+                        
+                except Exception as e:
+                    st.error(f"搜尋整理失敗: {e}")
 
-    # 使用 data_editor 進行編輯
-    # num_rows="dynamic" 讓使用者可以自己按 + 新增列
+# =======================
+# Tab 5: 管理
+# =======================
+with tab5:
+    st.write("### 🛠️ 編輯菜單")
     edited_df = st.data_editor(
         menu_df,
         num_rows="dynamic", 
         use_container_width=True,
         column_config={
-            "shop": st.column_config.TextColumn("店家名稱", help="例如：50嵐"),
-            "item": st.column_config.TextColumn("菜色名稱", help="例如：紅茶"),
+            "shop": st.column_config.TextColumn("店家"),
+            "item": st.column_config.TextColumn("菜名"),
             "price": st.column_config.NumberColumn("價格", format="$%d")
         },
-        key="menu_editor"
+        key="editor"
     )
 
-    if st.button("💾 儲存所有變更 (包含刪除與修改)", type="primary"):
-        try:
-            # 存回 Google Sheets
-            save_menu(edited_df)
-            st.success("✅ 菜單已更新！")
-            time.sleep(1)
-            st.rerun()
-        except Exception as e:
-            st.error(f"儲存失敗: {e}")
+    if st.button("💾 儲存變更"):
+        save_menu(edited_df)
+        st.success("已更新！")
+        time.sleep(1)
+        st.rerun()
