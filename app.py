@@ -7,7 +7,7 @@ import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
 
 # --- 📱 手機版面設定 CSS ---
-st.set_page_config(page_title="家族點餐", page_icon="🍱", layout="centered")
+st.set_page_config(page_title="點餐系統", page_icon="🍱", layout="centered")
 # --- 設定手機主畫面圖示 (Mobile App Icon) ---
 # 請將下方的 URL 換成你放在 GitHub 上的圖片 Raw URL
 # 或是隨便找一個網路上的圖示網址測試
@@ -36,28 +36,45 @@ st.markdown(
 
 st.markdown("""
     <style>
-    html, body, [class*="css"] { font-family: 'Heiti TC', 'Microsoft JhengHei', sans-serif; }
-    button[data-baseweb="tab"] { font-size: 16px !important; padding: 10px !important; flex: 1; }
-    input[type="number"] { font-size: 18px !important; text-align: center; }
-    .stButton > button { width: 100%; border-radius: 8px; font-weight: bold; padding: 10px; }
-    
-    /* 店家標題樣式 */
-    .shop-header {
-        background-color: #ffe0b2;
-        color: #e65100;
-        padding: 8px;
-        border-radius: 5px;
+    /* 全域字體優化 */
+    html, body, [class*="css"] {
+        font-family: 'Heiti TC', 'Microsoft JhengHei', sans-serif;
+    }
+    /* Tab 標籤加大 */
+    button[data-baseweb="tab"] {
+        font-size: 16px !important;
+        padding: 10px !important;
+        flex: 1; 
+    }
+    /* 數字輸入框 */
+    input[type="number"] {
+        font-size: 18px !important; 
+        text-align: center; 
+    }
+    /* 按鈕樣式 */
+    .stButton > button {
+        width: 100%;
+        border-radius: 8px;
         font-weight: bold;
-        margin-top: 15px;
-        margin-bottom: 5px;
+        padding: 10px;
     }
     
+    /* 卡片樣式 */
     div.dish-card {
         background-color: #f0f2f6;
         padding: 10px 15px;
         border-radius: 10px;
         margin-bottom: 8px;
         border: 1px solid #e0e0e0;
+    }
+    
+    /* 調整 Expander (摺疊選單) 的樣式 */
+    .streamlit-expanderHeader {
+        font-size: 18px;
+        font-weight: bold;
+        background-color: #fff3e0; /* 淺橘色底 */
+        color: #e65100;
+        border-radius: 5px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -78,7 +95,6 @@ def fetch_data():
     try:
         menu_df = conn.read(worksheet="Menu", ttl=0)
         orders_df = conn.read(worksheet="Orders", ttl=0)
-        # 確保欄位存在，避免剛改完表頭報錯
         if 'shop' not in menu_df.columns: menu_df['shop'] = '未分類'
         if 'shop' not in orders_df.columns: orders_df['shop'] = '未分類'
     except:
@@ -116,13 +132,13 @@ if orders_df.empty: orders_df = pd.DataFrame(columns=["name", "shop", "item", "q
 tab1, tab2, tab3 = st.tabs(["🍽️ 點餐", "📊 統計", "➕ 加店家"])
 
 # =======================
-# Tab 1: 點餐 (依店家分類)
+# Tab 1: 點餐 (支援摺疊收納)
 # =======================
 with tab1:
     if menu_df.empty:
         st.info("目前沒有菜單，請去「➕ 加店家」新增。")
     else:
-        # 準備舊訂單 map: key = "店家_菜名" (避免不同店同菜名混淆)
+        # 準備舊訂單 map
         my_orders = orders_df[orders_df['name'] == st.session_state.user_name]
         my_order_map = {}
         for _, r in my_orders.iterrows():
@@ -132,49 +148,49 @@ with tab1:
         current_input = {}
         
         with st.form("order_form"):
-            # 取得所有店家清單
             shops = menu_df['shop'].unique()
             
             for shop_name in shops:
-                if not shop_name: continue # 跳過空名稱
+                if not shop_name: continue
                 
-                # 顯示店家標題
-                st.markdown(f"<div class='shop-header'>🏪 {shop_name}</div>", unsafe_allow_html=True)
-                
-                # 篩選該店家的菜
+                # 計算該店有幾道菜，顯示在標題上
                 shop_menu = menu_df[menu_df['shop'] == shop_name]
+                item_count = len(shop_menu)
                 
-                for index, row in shop_menu.iterrows():
-                    dish = row['item']
-                    price = row['price']
-                    unique_key = f"{shop_name}_{dish}"
-                    default_qty = int(my_order_map.get(unique_key, 0))
+                # 👇👇👇 改用 Expander (可摺疊) 👇👇👇
+                # expanded=True 代表預設是展開的，如果要預設收起改成 False
+                with st.expander(f"🏪 {shop_name} ({item_count} 道菜)", expanded=True):
                     
-                    st.markdown(f"""
-                    <div class="dish-card">
-                        <div style="display:flex; justify-content:space-between;">
-                            <b>{dish}</b>
-                            <span style="color:#666;">${price}</span>
+                    for index, row in shop_menu.iterrows():
+                        dish = row['item']
+                        price = row['price']
+                        unique_key = f"{shop_name}_{dish}"
+                        default_qty = int(my_order_map.get(unique_key, 0))
+                        
+                        # 卡片內容
+                        st.markdown(f"""
+                        <div class="dish-card">
+                            <div style="display:flex; justify-content:space-between;">
+                                <b>{dish}</b>
+                                <span style="color:#666;">${price}</span>
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    current_input[unique_key] = st.number_input(
-                        f"數量", min_value=0, step=1, value=default_qty, 
-                        key=f"q_{unique_key}", label_visibility="collapsed"
-                    )
+                        """, unsafe_allow_html=True)
+                        
+                        current_input[unique_key] = st.number_input(
+                            f"數量", min_value=0, step=1, value=default_qty, 
+                            key=f"q_{unique_key}", label_visibility="collapsed"
+                        )
+                # 👆👆👆 Expander 結束 👆👆👆
             
             st.write("")
             submitted = st.form_submit_button("💾 送出訂單", type="primary")
 
         if submitted:
-            # 清除這個人所有的舊訂單，重新寫入
             clean_orders = orders_df[orders_df['name'] != st.session_state.user_name]
-            
             new_rows = []
             for unique_key, qty in current_input.items():
                 if qty > 0:
-                    # 還原 unique_key 回 shop 和 item
                     shop_val, item_val = unique_key.split("_", 1)
                     new_rows.append({
                         "name": st.session_state.user_name,
@@ -196,23 +212,21 @@ with tab2:
     if orders_df.empty:
         st.write("尚無訂單。")
     else:
-        # 合併價格 (需用 shop + item 雙重對應)
         merged = pd.merge(orders_df, menu_df, on=["shop", "item"], how="left")
         merged['subtotal'] = merged['qty'] * merged['price']
         
         total = merged['subtotal'].sum()
         st.metric("💰 總金額", f"${int(total)}")
         
-        # 依店家分組統計
         st.subheader("📋 廚房準備清單")
-        
         shops_in_order = merged['shop'].unique()
         for shop in shops_in_order:
-            st.markdown(f"**🏪 {shop}**")
-            shop_data = merged[merged['shop'] == shop]
-            summary = shop_data.groupby('item')['qty'].sum().reset_index()
-            summary = summary[summary['qty'] > 0]
-            st.table(summary)
+            # 這裡也加上 expander 讓統計畫面更整潔
+            with st.expander(f"🏪 {shop}", expanded=True):
+                shop_data = merged[merged['shop'] == shop]
+                summary = shop_data.groupby('item')['qty'].sum().reset_index()
+                summary = summary[summary['qty'] > 0]
+                st.table(summary)
             
         st.divider()
         st.subheader("👤 個人結帳明細")
@@ -225,12 +239,11 @@ with tab2:
         if st.button("🔄 刷新"): st.rerun()
 
 # =======================
-# Tab 3: 加店家 (多店家支援)
+# Tab 3: 加店家 (已整合中文強制翻譯)
 # =======================
 with tab3:
     st.write("### 📸 新增菜單")
     
-    # 1. 先輸入店家名稱
     shop_name_input = st.text_input("🏪 請輸入店家名稱 (例如：50嵐)", placeholder="未輸入會變成「未分類」")
     uploaded_file = st.file_uploader("上傳菜單照片", type=["jpg", "png", "jpeg"])
     
@@ -241,24 +254,29 @@ with tab3:
             with st.spinner(f"正在讀取【{shop_name_input}】的菜單..."):
                 try:
                     img = Image.open(uploaded_file)
-                    model = genai.GenerativeModel(model_name="gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+                    
+                    # 使用 Gemini 2.5 + 強制中文 Prompt
+                    model = genai.GenerativeModel(
+                        model_name="gemini-2.5-flash", 
+                        generation_config={"response_mime_type": "application/json"}
+                    )
                     prompt = """
-                    識別菜單，輸出JSON list: [{"item": "菜名", "price": 數字}]。
-                    非繁體中文請翻譯。無價格填0。
+                    你是一個台灣在地導遊與翻譯。請分析這張菜單圖片：
+                    1. 識別所有菜色與價格。
+                    2. 【重要】所有菜名一律翻譯成「台灣習慣的繁體中文」。
+                    3. 如果原文是英文/日文/韓文，不要保留原文，直接輸出中文翻譯。
+                    4. 輸出 JSON list 格式: [{"item": "中文菜名", "price": 數字}]。
+                    5. 如果價格不明，填 0。
                     """
+
                     resp = model.generate_content([prompt, img])
                     data = json.loads(resp.text)
                     
-                    # 加上店家欄位
                     new_df = pd.DataFrame(data)
                     new_df['shop'] = shop_name_input
-                    
-                    # 調整欄位順序
                     new_df = new_df[['shop', 'item', 'price']]
                     
-                    # 合併並存檔
                     combined = pd.concat([menu_df, new_df], ignore_index=True)
-                    # 同一家店、同菜名才去除重複
                     combined = combined.drop_duplicates(subset=['shop', 'item'], keep='last')
                     
                     save_menu(combined)
