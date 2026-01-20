@@ -68,11 +68,11 @@ st.markdown("""
         border: 1px solid #e0e0e0;
     }
     
-    /* 調整 Expander (摺疊選單) 的樣式 */
+    /* Expander 樣式 */
     .streamlit-expanderHeader {
         font-size: 18px;
         font-weight: bold;
-        background-color: #fff3e0; /* 淺橘色底 */
+        background-color: #fff3e0;
         color: #e65100;
         border-radius: 5px;
     }
@@ -93,10 +93,17 @@ except:
 # --- 資料庫操作 ---
 def fetch_data():
     try:
+        # ttl=0 確保每次都抓最新資料
         menu_df = conn.read(worksheet="Menu", ttl=0)
         orders_df = conn.read(worksheet="Orders", ttl=0)
+        
+        # 補齊欄位
         if 'shop' not in menu_df.columns: menu_df['shop'] = '未分類'
         if 'shop' not in orders_df.columns: orders_df['shop'] = '未分類'
+        
+        # 轉型確保價格是數字 (編輯時才不會報錯)
+        menu_df['price'] = pd.to_numeric(menu_df['price'], errors='coerce').fillna(0).astype(int)
+        
     except:
         menu_df = pd.DataFrame(columns=["shop", "item", "price"])
         orders_df = pd.DataFrame(columns=["name", "shop", "item", "qty"])
@@ -129,14 +136,15 @@ orders_df = orders_df.fillna("")
 if menu_df.empty: menu_df = pd.DataFrame(columns=["shop", "item", "price"])
 if orders_df.empty: orders_df = pd.DataFrame(columns=["name", "shop", "item", "qty"])
 
-tab1, tab2, tab3 = st.tabs(["🍽️ 點餐", "📊 統計", "➕ 加店家"])
+# 定義 4 個分頁
+tab1, tab2, tab3, tab4 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 加菜", "🛠️ 管理"])
 
 # =======================
 # Tab 1: 點餐 (支援摺疊收納)
 # =======================
 with tab1:
     if menu_df.empty:
-        st.info("目前沒有菜單，請去「➕ 加店家」新增。")
+        st.info("目前沒有菜單，請去「📸 加菜」或「🛠️ 管理」新增。")
     else:
         # 準備舊訂單 map
         my_orders = orders_df[orders_df['name'] == st.session_state.user_name]
@@ -153,21 +161,16 @@ with tab1:
             for shop_name in shops:
                 if not shop_name: continue
                 
-                # 計算該店有幾道菜，顯示在標題上
                 shop_menu = menu_df[menu_df['shop'] == shop_name]
                 item_count = len(shop_menu)
                 
-                # 👇👇👇 改用 Expander (可摺疊) 👇👇👇
-                # expanded=True 代表預設是展開的，如果要預設收起改成 False
-                with st.expander(f"🏪 {shop_name} ({item_count} 道菜)", expanded=True):
-                    
+                with st.expander(f"🏪 {shop_name} ({item_count})", expanded=True):
                     for index, row in shop_menu.iterrows():
                         dish = row['item']
                         price = row['price']
                         unique_key = f"{shop_name}_{dish}"
                         default_qty = int(my_order_map.get(unique_key, 0))
                         
-                        # 卡片內容
                         st.markdown(f"""
                         <div class="dish-card">
                             <div style="display:flex; justify-content:space-between;">
@@ -181,7 +184,6 @@ with tab1:
                             f"數量", min_value=0, step=1, value=default_qty, 
                             key=f"q_{unique_key}", label_visibility="collapsed"
                         )
-                # 👆👆👆 Expander 結束 👆👆👆
             
             st.write("")
             submitted = st.form_submit_button("💾 送出訂單", type="primary")
@@ -221,7 +223,6 @@ with tab2:
         st.subheader("📋 廚房準備清單")
         shops_in_order = merged['shop'].unique()
         for shop in shops_in_order:
-            # 這裡也加上 expander 讓統計畫面更整潔
             with st.expander(f"🏪 {shop}", expanded=True):
                 shop_data = merged[merged['shop'] == shop]
                 summary = shop_data.groupby('item')['qty'].sum().reset_index()
@@ -239,23 +240,21 @@ with tab2:
         if st.button("🔄 刷新"): st.rerun()
 
 # =======================
-# Tab 3: 加店家 (已整合中文強制翻譯)
+# Tab 3: AI 加菜
 # =======================
 with tab3:
-    st.write("### 📸 新增菜單")
+    st.write("### 📸 拍照新增")
     
-    shop_name_input = st.text_input("🏪 請輸入店家名稱 (例如：50嵐)", placeholder="未輸入會變成「未分類」")
+    shop_name_input = st.text_input("🏪 店家名稱", placeholder="例如：50嵐")
     uploaded_file = st.file_uploader("上傳菜單照片", type=["jpg", "png", "jpeg"])
     
     if uploaded_file and st.button("✨ 開始解析"):
         if not shop_name_input:
-            st.error("⚠️ 請先輸入店家名稱！")
+            st.error("⚠️ 請輸入店家名稱！")
         else:
             with st.spinner(f"正在讀取【{shop_name_input}】的菜單..."):
                 try:
                     img = Image.open(uploaded_file)
-                    
-                    # 使用 Gemini 2.5 + 強制中文 Prompt
                     model = genai.GenerativeModel(
                         model_name="gemini-2.5-flash", 
                         generation_config={"response_mime_type": "application/json"}
@@ -264,9 +263,9 @@ with tab3:
                     你是一個台灣在地導遊與翻譯。請分析這張菜單圖片：
                     1. 識別所有菜色與價格。
                     2. 【重要】所有菜名一律翻譯成「台灣習慣的繁體中文」。
-                    3. 如果原文是英文/日文/韓文，不要保留原文，直接輸出中文翻譯。
-                    4. 輸出 JSON list 格式: [{"item": "中文菜名", "price": 數字}]。
-                    5. 如果價格不明，填 0。
+                    3. 不要保留外文原文。
+                    4. 輸出 JSON list: [{"item": "中文菜名", "price": 數字}]。
+                    5. 價格不明填 0。
                     """
 
                     resp = model.generate_content([prompt, img])
@@ -280,23 +279,39 @@ with tab3:
                     combined = combined.drop_duplicates(subset=['shop', 'item'], keep='last')
                     
                     save_menu(combined)
-                    st.success(f"成功新增 {shop_name_input} 的 {len(data)} 道菜！")
+                    st.success(f"成功新增 {len(data)} 道菜！")
                     time.sleep(2)
                     st.rerun()
                 except Exception as e:
                     st.error(f"解析失敗: {e}")
 
-    st.write("---")
-    st.write("### ✍️ 手動輸入單品")
-    with st.form("manual_add"):
-        m_shop = st.text_input("店家", value=shop_name_input)
-        m_item = st.text_input("菜名")
-        m_price = st.number_input("價格", min_value=0)
-        
-        if st.form_submit_button("新增"):
-            if m_shop and m_item:
-                row = pd.DataFrame([{"shop": m_shop, "item": m_item, "price": m_price}])
-                combined = pd.concat([menu_df, row], ignore_index=True).drop_duplicates(subset=['shop', 'item'])
-                save_menu(combined)
-                st.success("已新增")
-                st.rerun()
+# =======================
+# Tab 4: 菜單管理 (新增編輯功能)
+# =======================
+with tab4:
+    st.write("### 🛠️ 編輯與刪除菜單")
+    st.info("💡 這裡像 Excel 一樣，可以直接點兩下修改，或勾選刪除。改完記得按下面的儲存按鈕！")
+
+    # 使用 data_editor 進行編輯
+    # num_rows="dynamic" 讓使用者可以自己按 + 新增列
+    edited_df = st.data_editor(
+        menu_df,
+        num_rows="dynamic", 
+        use_container_width=True,
+        column_config={
+            "shop": st.column_config.TextColumn("店家名稱", help="例如：50嵐"),
+            "item": st.column_config.TextColumn("菜色名稱", help="例如：紅茶"),
+            "price": st.column_config.NumberColumn("價格", format="$%d")
+        },
+        key="menu_editor"
+    )
+
+    if st.button("💾 儲存所有變更 (包含刪除與修改)", type="primary"):
+        try:
+            # 存回 Google Sheets
+            save_menu(edited_df)
+            st.success("✅ 菜單已更新！")
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"儲存失敗: {e}")
