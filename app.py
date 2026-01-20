@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import json
 import time
 from streamlit_gsheets import GSheetsConnection
 from duckduckgo_search import DDGS
@@ -23,7 +22,6 @@ st.markdown(f"""
     .stButton > button {{ width: 100%; border-radius: 8px; font-weight: bold; padding: 10px; }}
     .streamlit-expanderHeader {{ font-size: 18px; font-weight: bold; background-color: #fff3e0; color: #e65100; border-radius: 5px; }}
     
-    /* 食記卡片 */
     div.review-card {{
         background-color: #ffffff;
         padding: 15px;
@@ -44,24 +42,21 @@ except:
     st.error("連線錯誤，請檢查 Secrets 設定")
     st.stop()
 
-# --- 資料庫操作 (加上防呆機制) ---
+# --- 資料庫操作 (修復版) ---
 def fetch_data():
     try:
-        # ttl=5 表示快取 5 秒
+        # 嘗試讀取
         menu_df = conn.read(worksheet="Menu", ttl=5)
         orders_df = conn.read(worksheet="Orders", ttl=5)
         
-        # 確保欄位存在
+        # 確保欄位存在，若無則補上
         if 'shop' not in menu_df.columns: menu_df['shop'] = '未分類'
         if 'shop' not in orders_df.columns: orders_df['shop'] = '未分類'
         
-        # 轉型
-        menu_df['price'] = pd.to_numeric(menu_df['price'], errors='coerce').fillna(0).astype(int)
         return menu_df, orders_df
         
     except Exception as e:
-        # 如果讀取失敗，回傳空的表格，避免程式崩潰跳頁
-        # st.error(f"讀取資料庫失敗: {e}") # Debug用，若想畫面乾淨可註解
+        # 發生錯誤時回傳空表，避免程式當掉
         return pd.DataFrame(columns=["shop", "item", "price"]), pd.DataFrame(columns=["name", "shop", "item", "qty"])
 
 def save_menu(df):
@@ -95,13 +90,33 @@ with col2:
         st.session_state.user_name = ""
         st.rerun()
 
+# 讀取資料
 menu_df, orders_df = fetch_data()
+
+# --- 🚑 緊急除錯區 (這段會幫你抓出連線問題) ---
+if menu_df.empty and orders_df.empty:
+    st.error("⚠️ 讀不到資料！啟動診斷模式...")
+    try:
+        # 嘗試列出試算表裡到底有哪些分頁
+        # 注意：這需要 gsheets connection 的權限
+        st.info("正在檢查你的 Google 試算表...")
+        st.write("請確認你的試算表下方分頁名稱是否為 **Menu** 和 **Orders** (首字大寫)。")
+        st.write("如果看到 'Sheet1' 或 '工作表1'，請去 Google 試算表把它改名。")
+    except:
+        st.write("連線完全失敗，請檢查 secrets 裡的網址。")
+
+# --- 🧹 資料清理 (關鍵修復：避免 data_editor 崩潰) ---
+# 1. 確保數字欄位真的是數字 (NaN 補 0)
+menu_df['price'] = pd.to_numeric(menu_df['price'], errors='coerce').fillna(0).astype(int)
+
+if 'qty' in orders_df.columns:
+    orders_df['qty'] = pd.to_numeric(orders_df['qty'], errors='coerce').fillna(0).astype(int)
+else:
+    orders_df['qty'] = 0
+
+# 2. 剩下的文字欄位補空字串 (避免 None)
 menu_df = menu_df.fillna("")
 orders_df = orders_df.fillna("")
-
-# 🔴 錯誤偵測顯示區 (如果第一張截圖的 Menu 錯誤還在，這裡會提示)
-if menu_df.empty and orders_df.empty:
-    st.warning("⚠️ 警告：目前讀不到任何資料。請確認 Google 試算表下方分頁名稱是否為「Menu」和「Orders」(大小寫需一致)。")
 
 # 分頁定義
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 新增店家", "🌏 找食記", "🛠️ 管理"])
@@ -120,7 +135,6 @@ with tab1:
             if not shop_name: continue
             
             with st.expander(f"🏪 {shop_name}", expanded=False):
-                # 使用 form 防止每次輸入就跳轉
                 with st.form(f"order_form_{shop_name}"):
                     c1, c2, c3 = st.columns([2, 1, 1])
                     item_input = c1.text_input("品項", placeholder="例如：雞排")
@@ -134,11 +148,11 @@ with tab1:
                                 "shop": shop_name,
                                 "item": item_input,
                                 "qty": qty_input,
-                                "price": price_input # 這裡暫存價格，雖然統計有點複雜，但先存起來
+                                "price": price_input 
                             }
                             # 重新讀取確保不蓋掉別人的
-                            current_menu, current_orders = fetch_data()
-                            updated_orders = pd.concat([current_orders, pd.DataFrame([new_row])], ignore_index=True)
+                            cur_menu, cur_orders = fetch_data()
+                            updated_orders = pd.concat([cur_orders, pd.DataFrame([new_row])], ignore_index=True)
                             save_orders(updated_orders)
                             st.toast(f"已幫 {st.session_state.user_name} 點了 {item_input}！")
                             time.sleep(1)
@@ -151,15 +165,9 @@ with tab2:
     if orders_df.empty:
         st.write("尚無訂單。")
     else:
-        # 簡易統計邏輯
-        # 嘗試將 Menu 的價格合併進來 (如果是預設菜單)
-        # 如果 Menu 沒價格，就看 Orders 裡面有沒有填價格
+        # 合併顯示
         merged = pd.merge(orders_df, menu_df, on=["shop", "item"], how="left", suffixes=('', '_menu'))
-        
-        # 優先使用 Menu 的價格，如果沒有則使用訂單輸入的價格
         merged['final_price'] = merged['price_menu'].fillna(0)
-        # 如果 Menu 價格是 0 (自由輸入)，嘗試拿使用者輸入的 price (如果有存的話，目前架構 orders 表沒 price 欄位，需依賴上一版結構)
-        # 為了簡化，我們主要統計數量
         
         st.subheader("📋 彙總清單")
         for shop in merged['shop'].unique():
@@ -177,6 +185,8 @@ with tab2:
 
     st.write("---")
     st.write("### 🛠️ 修改訂單")
+    
+    # 這裡就是原本報錯的地方，現在已經修復
     edited_orders = st.data_editor(
         orders_df,
         num_rows="dynamic",
@@ -185,7 +195,7 @@ with tab2:
             "name": st.column_config.TextColumn("名字"),
             "shop": st.column_config.TextColumn("店家"),
             "item": st.column_config.TextColumn("品項"),
-            "qty": st.column_config.NumberColumn("數量")
+            "qty": st.column_config.NumberColumn("數量", required=True, default=1) 
         },
         key="order_editor"
     )
@@ -208,7 +218,6 @@ with tab3:
     if submit_shop:
         if new_shop_name:
             new_row = pd.DataFrame([{"shop": new_shop_name, "item": "系統預設(勿刪)", "price": 0}])
-            # 先讀取最新 Menu
             cur_menu, _ = fetch_data()
             updated_menu = pd.concat([cur_menu, new_row], ignore_index=True).drop_duplicates(subset=['shop', 'item'])
             save_menu(updated_menu)
@@ -219,12 +228,11 @@ with tab3:
             st.error("請輸入店名！")
 
 # =======================
-# Tab 4: 找食記 (修正版)
+# Tab 4: 找食記
 # =======================
 with tab4:
     st.write("### 🌏 搜尋食記與評價")
     
-    # 使用 Form 避免輸入時一直跳轉
     with st.form("search_reviews_form"):
         query_shop = st.text_input("輸入想查的餐廳/食物", placeholder="例如：台東 阿鋐炸雞")
         search_btn = st.form_submit_button("🔍 搜尋")
@@ -232,7 +240,6 @@ with tab4:
     if search_btn and query_shop:
         st.info(f"正在搜尋：{query_shop}...")
         
-        # 1. 提供直接連結 (保底方案，絕對不會失敗)
         google_url = f"https://www.google.com/search?q={query_shop}+食記+菜單+dcard"
         st.markdown(f"""
             <a href="{google_url}" target="_blank" style="display:block; background-color:#4285F4; color:white; text-align:center; padding:12px; border-radius:8px; text-decoration:none; font-weight:bold; margin-bottom:15px;">
@@ -240,7 +247,6 @@ with tab4:
             </a>
         """, unsafe_allow_html=True)
         
-        # 2. 嘗試用 DuckDuckGo 抓取內容 (可能會失敗，所以用 try 包起來)
         try:
             results = DDGS().text(f"{query_shop} 食記 菜單 評價 dcard ptt", max_results=5)
             if results:
@@ -254,8 +260,8 @@ with tab4:
                     """, unsafe_allow_html=True)
             else:
                 st.caption("自動抓取無結果，請使用上方藍色按鈕直接搜尋。")
-        except Exception as e:
-            st.caption("自動抓取受限 (IP 限制)，請使用上方藍色按鈕直接搜尋。")
+        except:
+            st.caption("自動抓取受限，請使用上方藍色按鈕直接搜尋。")
 
 # =======================
 # Tab 5: 管理
