@@ -87,7 +87,20 @@ if "user_name" not in st.session_state or not st.session_state.user_name:
     st.stop()
 
 # --- 主程式 ---
-st.caption(f"👤 身份：{st.session_state.user_name}")
+# --- 主程式 (修改這裡：增加快速換人按鈕) ---
+# 使用 col1, col2 把「歡迎詞」和「換人按鈕」排在同一排
+col1, col2 = st.columns([3, 1]) 
+
+with col1:
+    st.write(f"### 👋 Hi, {st.session_state.user_name}")
+
+with col2:
+    # 這裡加入換人按鈕
+    if st.button("🔄 換人", type="secondary"):
+        st.session_state.user_name = "" # 清空名字
+        st.rerun() # 重新執行，會自動跳回輸入名字的畫面
+
+# 讀取資料
 menu_df, orders_df = fetch_data()
 menu_df = menu_df.fillna("")
 orders_df = orders_df.fillna("")
