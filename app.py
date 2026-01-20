@@ -9,12 +9,9 @@ from duckduckgo_search import DDGS  # 引入搜尋工具
 
 # --- 📱 手機版面設定 CSS ---
 st.set_page_config(page_title="點餐", page_icon="🍱", layout="centered")
-# --- 設定手機主畫面圖示 (Mobile App Icon) ---
-# 請將下方的 URL 換成你放在 GitHub 上的圖片 Raw URL
-# 或是隨便找一個網路上的圖示網址測試
-icon_url = "https://github.com/gavinlin0424/travel-menu-ai/blob/a0eb070625c2249f21bdcc11b3bee24eb68183ed/app_icon.png"
 
-# 這段 HTML 會告訴 Apple 和 Android 裝置使用指定的圖示
+# --- 設定手機主畫面圖示 ---
+icon_url = "https://github.com/gavinlin0424/travel-menu-ai/blob/a0eb070625c2249f21bdcc11b3bee24eb68183ed/app_icon.png"
 st.markdown(
     f"""
     <head>
@@ -26,15 +23,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
-# 為了確保 iPhone 能夠正確讀取，有時候需要一個隱藏的圖片元素來預加載
-st.markdown(
-    f'<img src="{icon_url}" style="display:none;">', 
-    unsafe_allow_html=True
-)
-
-# ... 下面接原本的主程式 ...
-
+st.markdown(f'<img src="{icon_url}" style="display:none;">', unsafe_allow_html=True)
 
 st.markdown("""
     <style>
@@ -82,7 +71,6 @@ def search_menu_on_web(query):
     """使用 DuckDuckGo 搜尋菜單文字資訊"""
     try:
         results = DDGS().text(f"{query} 菜單 價格 2024 2025", max_results=5)
-        # 將搜尋結果合併成字串給 AI 讀
         search_content = "\n".join([f"標題: {r['title']}\n內容: {r['body']}" for r in results])
         return search_content
     except Exception as e:
@@ -107,10 +95,9 @@ orders_df = orders_df.fillna("")
 if menu_df.empty: menu_df = pd.DataFrame(columns=["shop", "item", "price"])
 if orders_df.empty: orders_df = pd.DataFrame(columns=["name", "shop", "item", "qty"])
 
-# 定義 5 個分頁
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍽️ 點餐", "📊 統計", "📸 拍照", "🔍 搜尋", "🛠️ 管理"])
+# 定義 5 個分頁 (修改 Tab 3 名稱，並在 Tab 2 增加功能)
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🍽️ 點餐", "📊 統計/修改", "📸 新增菜單", "🔍 搜尋", "🛠️ 菜單管理"])
 
-# 提取共用的 Prompt (關鍵修改：保留原文)
 COMMON_PROMPT = """
 你是一個菜單整理助手。請依照以下規則提取菜單：
 1. 識別所有菜色與價格。
@@ -125,7 +112,7 @@ COMMON_PROMPT = """
 # =======================
 with tab1:
     if menu_df.empty:
-        st.info("目前沒有菜單，請去「📸 拍照」或「🔍 搜尋」新增。")
+        st.info("目前沒有菜單，請去「📸 新增菜單」或「🔍 搜尋」新增。")
     else:
         my_orders = orders_df[orders_df['name'] == st.session_state.user_name]
         my_order_map = {f"{r['shop']}_{r['item']}": r['qty'] for _, r in my_orders.iterrows()}
@@ -171,7 +158,7 @@ with tab1:
                 st.rerun()
 
 # =======================
-# Tab 2: 統計
+# Tab 2: 統計 (新增修改功能)
 # =======================
 with tab2:
     if orders_df.empty:
@@ -194,15 +181,40 @@ with tab2:
             with st.expander(f"{name} (${int(group['subtotal'].sum())})"):
                 for _, row in group.iterrows():
                     st.write(f"[{row['shop']}] {row['item']} x{row['qty']}")
-        if st.button("🔄 刷新"): st.rerun()
+    
+    st.write("---")
+    st.write("### 🛠️ 修改/刪除訂單")
+    st.info("💡 如果有人點錯，或是要幫忙調整數量，請在下方直接修改，改完記得按「儲存」。")
+    
+    # 使用 data_editor 讓使用者直接編輯 orders_df
+    edited_orders = st.data_editor(
+        orders_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "name": st.column_config.TextColumn("點餐人"),
+            "shop": st.column_config.TextColumn("店家"),
+            "item": st.column_config.TextColumn("品項"),
+            "qty": st.column_config.NumberColumn("數量")
+        },
+        key="order_editor" # 給它一個 Key 避免狀態跑掉
+    )
+    
+    if st.button("💾 儲存訂單修改 (Tab 2)"):
+        save_orders(edited_orders)
+        st.success("訂單紀錄已更新！")
+        time.sleep(1)
+        st.rerun()
 
 # =======================
-# Tab 3: 拍照新增
+# Tab 3: 拍照新增 (修正跳轉問題)
 # =======================
 with tab3:
-    st.write("### 📸 拍照新增")
+    st.write("### 📸 新增菜單") # 已改名
     shop_input = st.text_input("🏪 店家名稱 (拍照)", placeholder="例如：50嵐")
-    uploaded_file = st.file_uploader("上傳菜單照片", type=["jpg", "png", "jpeg"])
+    
+    # 【關鍵修正】加上 key="upload_menu_img" 避免上傳後跳回 Tab 1
+    uploaded_file = st.file_uploader("上傳菜單照片", type=["jpg", "png", "jpeg"], key="upload_menu_img")
     
     if uploaded_file and st.button("✨ 解析照片"):
         if not shop_input:
@@ -226,7 +238,7 @@ with tab3:
                     st.error(f"解析失敗: {e}")
 
 # =======================
-# Tab 4: 搜尋新增 (新功能!)
+# Tab 4: 搜尋新增
 # =======================
 with tab4:
     st.write("### 🔍 AI 搜尋菜單")
@@ -239,26 +251,20 @@ with tab4:
             st.error("請輸入店名！")
         else:
             with st.spinner(f"正在網路上搜尋【{search_shop_name}】的菜單與食記..."):
-                # 1. 先用 DuckDuckGo 搜尋網路文字
                 web_content = search_menu_on_web(search_shop_name)
                 
                 if not web_content:
                     st.warning("搜尋不到資料，嘗試使用 AI 內建知識庫...")
                     web_content = f"請根據你的知識庫列出 {search_shop_name} 的菜單。"
                 
-                # 2. 將搜尋到的亂七八糟文字丟給 AI 整理
                 try:
                     model = genai.GenerativeModel("gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
-                    
-                    # 組合 Prompt：搜尋結果 + 整理指令
                     full_prompt = f"""
                     以下是關於「{search_shop_name}」的網路搜尋結果或食記：
                     {web_content}
-                    
                     請根據以上資訊整理出菜單。
                     {COMMON_PROMPT}
                     """
-                    
                     resp = model.generate_content(full_prompt)
                     items = json.loads(resp.text)
                     
@@ -268,7 +274,7 @@ with tab4:
                         new_df = new_df[['shop', 'item', 'price']]
                         
                         save_menu(pd.concat([menu_df, new_df], ignore_index=True).drop_duplicates(subset=['shop', 'item'], keep='last'))
-                        st.success(f"搜尋完畢！找到 {len(items)} 道菜（{items[0]['item']}...等）")
+                        st.success(f"搜尋完畢！找到 {len(items)} 道菜")
                         st.balloons()
                         time.sleep(2)
                         st.rerun()
@@ -292,10 +298,10 @@ with tab5:
             "item": st.column_config.TextColumn("菜名"),
             "price": st.column_config.NumberColumn("價格", format="$%d")
         },
-        key="editor"
+        key="menu_editor"
     )
 
-    if st.button("💾 儲存變更"):
+    if st.button("💾 儲存菜單變更"):
         save_menu(edited_df)
         st.success("已更新！")
         time.sleep(1)
